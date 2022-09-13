@@ -1,0 +1,164 @@
+---
+title: "Analysis and Figures for Blog Post"
+output: html_document
+date: "2022-09-10"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+rm(list = ls())
+source("C:/Users/peter/Dropbox/Projects/FFIEC/[2] Macroeconomic data/macro_functions.R")
+library(pacman)
+p_load(magrittr,fredr,data.table,lubridate,reshape2)
+p_load(data.table,ggplot2,magrittr)
+rawData <-as.data.table( readRDS(file = "C:/Users/peter/Dropbox/Projects/FFIEC/[2] Macroeconomic data/untransformedMacro.RDS"))
+
+formattingDetails <- function(){return( theme_bw()+theme(axis.text = element_text(size = 13),
+                                                         legend.position = "bottom",
+                                                         axis.title = element_text(size = 16 ),
+                                                         text = element_text(family = "sans"), 
+                                                         title = element_text(size = 20),
+                                                         legend.text = element_text(size = 13),
+                                                         legend.title = element_blank())      )}
+```
+
+# HPI Figures
+
+```{r}
+fredr_set_key("9232e9b2345f270812e16d4393012d18")
+hpi <- data.table(fredr( series_id = "CSUSHPISA", observation_start = as.Date("1990-01-01"), observation_end = as.Date("2022-01-01"),frequency = "m"  ))
+hpi <- hpi[,( c("date","value")),with = F]
+names(hpi) <- c("date","HPI")
+hpiData <- hpi
+
+
+#hpiData <- rawData[,c("date","CSUSHPISA"), with = F]
+names(hpiData) <- c("Date","HPI")
+hpiData[,HPA := HPI/shift(HPI,4)-1]
+hpiData[,"Diff. HPI"  := HPI-shift(HPI,1)]
+hpiData
+```
+
+```{r}
+hpiDataMelted <- melt(hpiData,id.vars = "Date") 
+hpaPlot <- ggplot(hpiDataMelted) + geom_line(aes(x = Date,y = value , color = variable  ))+formattingDetails() + facet_grid(  variable~.,scales = "free_y"  )+  scale_color_manual(values=c("#000000", "#1c8f02", "#0031ff")) + ggtitle("Comparison of HPI to Percentage Change in HPI")
+hpaPlot
+```
+
+```{r}
+ggsave(plot = hpaPlot,filename = "HPA Results.png",height = 5,width = 9)
+```
+
+ 
+Check for stationarity and autocorrelation
+
+```{r}
+p_load(tseries)
+hpiADF<- tseries::adf.test(hpiData$HPI,k = 1)
+hpaADF<- tseries::adf.test(na.remove(hpiData$HPA),k = 1)
+hpaADF
+```
+
+# Fractional differencing tests
+
+```{r}
+source("C:/Users/peter/Dropbox/Projects/FFIEC/functions for blog post.R")
+# The palette with grey:
+cbPalette <- c("#000000", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+dValues <- c(.2,.4,.6,.8,1.0)
+weightResults <- lapply(X = dValues , function(x){fracWeights(d = x,size = 5)}) %>% as.data.table
+names(weightResults) <- paste("d=",as.character(dValues) ,sep = "") 
+weightResults[,Index:= 1:6]
+weightResultsMelted <- melt(weightResults,id.vars = "Index")
+weightedResultsPlot <- ggplot(weightResultsMelted) + 
+                              geom_line(aes(x = Index, y = value, color = variable))+ scale_fill_manual(values=cbPalette) + theme(axis.text.y = element_blank())+
+                              formattingDetails() +  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"))+
+                              ggtitle("Fractional differencing weights")
+
+ggsave( plot = weightedResultsPlot,filename = "Fractional Weidhts.png",height = 5,width = 9 )
+weightedResultsPlot
+```
+
+```{r}
+dValues <- c(.4, .8 )
+weightResults <- lapply(X = dValues , function(x){fracWeights(d = x,size = 20)}) %>% as.data.table
+names(weightResults) <- paste("d=",as.character(dValues) ,sep = "") 
+weightResults[,Index:= 1:21]
+weightResultsMelted <- melt(weightResults,id.vars = "Index")
+weightedResultsPlot <- ggplot(weightResultsMelted) + 
+                              geom_line(aes(x = Index, y = value, color = variable))+ scale_fill_manual(values=cbPalette) + theme(axis.text.y = element_blank())+
+                              formattingDetails() +  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7"))+
+                              ggtitle("Fractional differencing weights over 20 time-periods")
+
+ggsave( plot = weightedResultsPlot,filename = "Fractional Weidhts2.png",height = 5,width = 9 )
+weightedResultsPlot
+```
+
+```{r}
+ 
+fracDiffHPI <- identifyDifferencing( hpiData$HPI , dLow=0, dHigh=5,size = 20,steps = 1000, threshold = 1e-5)
+  
+  
+fracDiffHPI$Plot
+  
+```
+
+Plot the HPI results with the suggested lag:
+
+```{r}
+hpiData[, HPA := NULL]
+hpiData$Frac.Diff.HPI <- genFracWeightedSeries( hpiData$HPI  ,d = fracDiffHPI$d,threshold = 1e-5,size = 20)
+hpiDataMelted <- melt(hpiData,id.vars = "Date") 
+hpaPlot <- ggplot(hpiDataMelted) + geom_line(aes(x = Date,y = value , color = variable  ))+formattingDetails() + facet_grid(  variable~.,scales = "free_y"  )+  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")) + ggtitle("Comparison of HPI to Percentage Change in HPI")
+ggsave( plot = hpaPlot,filename = "Frac Diff HPI.png",height = 5,width = 9 )
+hpaPlot 
+```
+
+#  SP 500
+
+
+
+
+```{r}
+
+
+sp <- data.table(fredr( series_id = "SP500", observation_start = as.Date("1990-01-01"), observation_end = as.Date("2022-01-01"),frequency = "d" ))
+sp <- sp[,( c("date","value")),with = F]
+names(sp) <- c("date","SP500")
+SP500Data <- sp
+names(SP500Data) <- c("Date","SP500") 
+SP500Data <- na.omit(SP500Data)
+SP500Data[,"Diff. SP500"  := SP500-shift(SP500,1)]
+```
+ 
+
+
+```{r}
+fracDiffSP500 <- identifyDifferencing(  SP500Data$SP500      , dLow=0, dHigh=1,size = 20,steps = 100 , threshold = 1e-5,pThreshold = .02)
+ggsave(fracDiffSP500$Plot,filename = "fractional differencing values for sp500.png",height = 5, width = 9)
+fracDiffSP500$Plot
+```
+
+Plot the SP500 results with the suggested lag:
+
+```{r}
+
+
+SP500Data$Frac.Diff.SP500 <- genFracWeightedSeries(  SP500Data$SP500   ,d = fracDiffSP500$d,threshold = 1e-5,size = 20)
+SP500Data <-   SP500Data[SP500>0] 
+SP500DataMelted <- melt(SP500Data,id.vars = "Date") 
+SP500DataPlot <- ggplot(SP500DataMelted) + geom_line(aes(x = Date,y = value , color = variable  ))+formattingDetails() + facet_grid(  variable~.,scales = "free_y"  )+  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E0 0", "#CC79A7")) + ggtitle("Comparison of SP500 to Percentage Change in SP500")
+ggsave( plot = SP500DataPlot,filename = "Frac Diff SP500.png",height = 5,width = 9 )
+SP500DataPlot 
+```
+
+```{r}
+
+```
+
+ 
+
